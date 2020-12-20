@@ -26,3 +26,6 @@ several steps:
       
 8. Quality checks. Detection of code errors and defective results.
 9. Save the files in a new directory.
+
+
+You can find the file [here!](https://github.com/JaraTech/SynBio/blob/main/Codon_Optimization/codon_optimization.Rmd)
