@@ -1,0 +1,425 @@
+---
+title: "Codon optimization pipeline"
+author: "JSM"
+date: "11/25/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+________________________________________________________________________________
+
+PIPELINE FOR CODON OPTIMIZATION
+
+The herein document contains the code to optimize the codons of any given
+nucleotide sequence for any host species. The script will be divided into
+several steps:
+1. Install de required packages
+2. Download the libraries of the installed packages
+3. Input data for the pipeline
+4. Get the codon usage of the host species:
+   - Retrieve CDSs. The sequences will be sourced from the database "refseq"
+     and are predicted CDSs.
+   - Get the number of counts for every codon. Based only on in-frame and
+     M-starting CDSs.
+   - Quality check. Randomly select a CDS and an aminoacid. Same number of
+     synonym codons as selected aminoacid.
+5. Build the data table with as many rows as different codons (64).
+6. Prepare gene of interest (GOI):
+   - Scan the fasta file and convert into a 1-64 code sequence.
+7. Optimization. There are two methods:
+   A) Sampling: this method substitute every codon by a codon encoding for
+      the same aminoacid, taking the relative frequence as the probability
+      for substitution. A given position might remain the same. It is a
+      randomized process and everytime will result something different.
+        - Generate list of probabilities
+        - Substitute every position. Get codon and code sequences
+   B) Threshold: this method acts on those codons whose relative frequency
+      is below the threshold. Every position in the sequence with such a
+      codon is substituted by the synonym codon with the highest frequency.
+      It is a fixed process based on the last four columns of the data table.
+      It is needed to set the threshold.
+8. Quality checks. Detection of code errors and defective results.
+9. Save the files in a new directory.
+
+________________________________________________________________________________
+
+1. INSTALL REQUIRED PACKAGES
+This step will be needed just the first time using this pipeline in R Studio.
+It will require internet connection.
+It will make sure the library of the required packages is in a local directory
+
+```{r}
+# 1. Install packages. **RUN ONLY FIRST TIME** For this, remove the hashtag at
+# the beginning of every of the following lines:
+#install.packages("dplyr")                   # Write "Yes" to compile
+#install.packages("seqinr")
+#install.packages("stringr")                 # Click "Yes" to restart R
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#  install.packages("BiocManager")
+#BiocManager::install("biomartr")            # Update "all" packages
+```
+
+2. DOWNLOAD THE LIBRARIES OF THE INSTALLED PACKAGES
+This step loads the content of the packages in the R session. It enables the
+use of package-specific functions.
+
+```{r, message=FALSE}
+# 2. Load packages into the R session
+require("dplyr")
+require("seqinr")
+require("biomartr")
+require("stringr")
+```
+
+3. INPUT DATA FOR THE PIPELINE
+
+This data will change for every new species and every new gene.
+- download_species: to retrieve the CDSs from ncbi.
+  E.g.: "Enterococcus casseliflavus"
+- GOI: name of the file with the gene to be optimized in a fasta format.
+  E.g.: "GOI_MHETase"
+- ext: extension of the file with the gene.
+  E.g.: ".txt"
+- numcode: number of the genetic code to be used for translation.
+  E.g.: 1
+- Frame: position in which the translation should start.
+  E.g.: 0
+You can also see your working directory so that you can access to it from your
+the file explorer of your device. Make sure the sequences are stored in this
+working directory.
+
+```{r, results='hide'}
+# 3. Input data for the pipeline. ***Change this data every time***
+download_species <- "Enterococcus casseliflavus"
+GOI <- "GOI_MHETase"
+ext <- ".txt"
+threshold <- .15
+
+numcode <- 1      # 1 = Standard code. More info at:
+frame <- 0        # https://www.ncbi.nlm.nih.gov/Taxonomy/Utils/wprintgc.cgi
+
+getwd()           # Check the working directory is the one storing the sequences
+# setwd()         # Change the working directory with this function. Write the
+                  # desired working directory between quotation marks.
+```
+
+4. GET THE CODON USAGE OF THE HOST SPECIES
+1.1 Retrieve CDSs.
+Specify the species and run the function to retrieve the CDSs in your computer.
+This step might take a bit. Make sure you have set the working directory at the
+desired location. The CDSs will be saved in a new directory: 
+"ncbi_downloads/CDS/". They can be loaded into the R environment in a fasta 
+format
+1.2 Number of counts for every codon.
+- Eliminate the CDSs that do not start in ATG and those that are not in frame.
+- Calculate the number of incidences of every codon in all remaining proteins. 
+This step might take a bit.
+1.3 Quality check for codon retrieval.
+Calculate the times a specific set of codons appear on a single random protein.
+The set of codons shall be grouped in synonym codons.
+Here you can check whether the times all synonym codons for a specific 
+aminoacid match with the times this aminoacid is present in the translation of 
+the sequence. Since the protein chosen is randomized, this code tests something
+different every time.
+
+```{r}
+# 4.1 RETRIEVE CDSs
+# Run this function to retrieve the CDSs of the specific organism from the
+# refseq database in ncbi.
+# **This code is needed just ONE time**
+# For this, delete the hashtag at the begining of the following 2 lines:
+#getCDS( db = "refseq", organism = download_species, gunzip = T,
+#        path = file.path("ncbi_downloads","CDS"))
+```
+
+```{r}
+# 4.1 RETRIEVE CDSs
+# Get the CDS in an R object
+file_path <- paste0("ncbi_downloads/CDS/",
+                    stringr::str_replace_all(download_species, " ", "_"),
+                    "_cds_from_genomic_", "refseq", ".fna")
+list_CDS <- read_cds(file_path, format = "fasta")     
+
+
+# 4.2 NUMBER OF COUNTS FOR EVERY CODON
+# Eliminate questionable CDSs
+prots <- length(list_CDS)                             
+frameless <- vector(length = prots)
+CDS <- list_CDS
+for (i in 1:length(frameless)) {
+  frameless[i] <- length(CDS[[i]])/3==round(length(CDS[[i]])/3)&&CDS[[i]][1:3]=="ATG"   
+}
+prots <- c(1:prots)[frameless==T]
+length(prots)                                   # Number of CDSs to be used
+# Calculate the number of incidences of every codon in all remaining proteins
+codon_freq <- vector(length = 64)
+for (i in 1:length(prots)) {
+  ntstring <- as.character(list_CDS[[i]])
+  ntseq <- s2c(ntstring)
+  nseq <- s2n(ntseq, levels = s2c("tcag"))
+  c1 <- seq(from = 1, to = length(nseq), by = 3)
+  prots[i] <- list(16 * nseq[c1] + 4 * nseq[c1 + 1] + nseq[c1 + 2] + 1)
+  for (j in 1:length(codon_freq)){
+    codon_freq[j] <- codon_freq[j] + sum(prots[[i]]%in%j)
+  }
+}
+
+
+# 4.3 Quality check for codon retrieval.
+## Does the frequency of a specific codon in a given protein match with
+## the number of that aminoacid in that protein?
+# Choose a random aa
+aa <- sample(unique(SEQINR.UTIL$CODON.AA$L), 1)                          
+# Get the codes for codons for that aa
+aa_code <- which(s2c(SEQINR.UTIL$CODES.NCBI$CODES[numcode])==aa)         
+# Choose a random CDS from the organism
+random_prot <- sample(1:length(prots), 1)                                
+# Aminoacid sequence
+trad <- s2c(SEQINR.UTIL$CODES.NCBI$CODES[numcode])[prots[[random_prot]]] 
+# Code sequence
+ncodon <- prots[[random_prot]]                                           
+# TRUE: same number of synonym codes and aminoacids
+identical(sum(ncodon%in%aa_code), sum(trad%in%aa))                       
+```
+
+5. BUILD THE DATA TABLE
+This step will build the data frame with all the needed content. You can see
+dimensions with function dim() and structure with function str(). It has 64
+rows (observations), one per codon, and 12 different columns (variables). The
+columns are:
+- CODON. Combinations of three letters representing the 4 nucleotides (tacg)
+- AA. Three-letters diminutive representing the 21 aminoacids. The rows with
+  synonym codons will have the same value
+- L. One-letter symbol representing the 21 aminoacids. The rows with synonym
+  codons will have the same value
+- Code. Number assigned to every codon, from 1 to 64 (t<a<c<g)
+- Counts. Number of times a codon appears in all tested CDSs
+- Usage. Normalization of the counts to 1 (proportion of every codon in 
+  all tested CDSs)
+- Sum_AA. Sumatorium of the usage per AA. The rows with synonym codons will have
+  the same value
+- Freq_rel. Frequency of a given codon relative to the sum of its synonym codons
+- Freq_best. Relative frequency of the most comon synonim codon. The rows with 
+  synonym codons will have the same value
+- Freq_opt. Based on Freq_rel. Frequencies < threshold will be change by the 
+  frequency of the most frequent synonym codon
+- Codon_opt. Based on CODON. Least frequent codons (< threshold) are replaced by
+  the synonym codon with the highest frequency
+- Code_opt. Code of the Codon_opt based on the 1-64 assignment.
+  The rows with Freq_rel < threshold will change codon.
+Functions and index will refer to this data table to get the required information
+along the pipeline.
+
+```{r}
+# 5. Build the data table
+# Data frame based on a provided table in package
+def_table <- SEQINR.UTIL$CODON.AA                                                  
+digits <- s2n(s2c(c2s(def_table$CODON)), levels = s2c("tcag"))                     
+c1 <- seq(from = 1, to = length(digits), by = 3)
+# New column: codon code
+def_table$Code <- 16 * digits[c1] + 4 * digits[c1 + 1] + digits[c1 + 2] + 1        
+# New column: codon counts
+def_table$Counts <- codon_freq                                                     
+# New column: codon proportion
+def_table$Usage <- codon_freq/sum(codon_freq)                                      
+# New column: sum of frequencies of synonym codons
+def_table$Sum_AA <- ave(def_table$Usage, def_table$AA, FUN=sum)                    
+# New column: relative frequence/aminoacid
+def_table$Freq_rel <- def_table$Usage/def_table$Sum_AA                             
+# New column: max frequence in every aminoacid
+def_table$Freq_best <- ave(def_table$Freq_rel, def_table$L, FUN=max)               
+# New columns: optimum codon & optimum freq
+def_table <- def_table %>%                                                         
+  group_by(L) %>% 
+  mutate(Codon_opt = replace(CODON, Freq_rel < threshold, CODON[Freq_rel == Freq_best]),
+         Freq_opt = replace(Freq_rel, Freq_rel < threshold, max(Freq_rel))) %>%
+  as.data.frame()
+# New column: optimum codon code
+a <- s2n(s2c(c2s(def_table$Codon_opt)), levels = s2c("tcag"))                      
+c1 <- seq(from = 1, to = length(a), by = 3)
+cod <- 16 * a[c1] + 4 * a[c1 + 1] + a[c1 + 2] + 1
+def_table$Code_opt <- cod
+```
+
+6. PREPARE GENE OF INTEREST (GOI):
+6.1 Scan the fasta file. Make sure you have set the working directory at the
+location containing the GOI. The sequence is preferably a .txt file.
+6.2 Convert into a 1-64 code sequence.
+- Convert the string into a character vector and this into numbers,
+  from 0 to 3 (t<c<a<g).
+- Create a new vector with the first position of every codon
+  (separation of three elements).
+- Create the codon code sequence: multiply the first elements by 16,
+  the seconds by 4 and the thirds by 1. Sum them all + 1.
+6.3 Load the aminoacids in the proper order for future translations
+
+```{r}
+# 6.1 Scan fasta file
+GOI_nt <- scan(paste0(GOI, ext), character(), quote = "")   # Load sequence
+# 6.2 Create de code vector
+GOI_nt <- s2c(GOI_nt)
+seqn <- s2n(tolower(GOI_nt), levels = s2c("tcag"))          # Convert sequence in digits
+l <- 3 * ((length(GOI_nt) - frame)%/%3)                     # Set length
+c1 <- seq(from = frame + 1, to = frame + l, by = 3)         # First position of all codons
+tra <- 16 * seqn[c1] + 4 * seqn[c1 + 1] + seqn[c1 + 2] + 1  # Convert to codon code
+# 6.3 Aminoacids in order to translate
+Lcode <- s2c(SEQINR.UTIL$CODES.NCBI$CODES[numcode])         # Retrieve AAs in order
+```
+
+7.A OPTIMIZATION BY SAMPLING
+This method works on every position of the GOI by substituting according to the
+codon usage of the set species. As the substitutions can only happen between 
+synonym codons, it ensures the translation of the input and the output is 
+always the same. The substitutions occur based on a given probability, which is 
+the codon usage of the set species. This method returns a highly changed 
+nucleotide sequence. Some positions might remain the same. It is a randomized 
+process thus every time is different but it always return a nucleotide sequence
+with the same codon usage as the organism.
+7.A.1 Generate list of probabilities. Firstly, create a list with the relative 
+frequencies per aminoacid for every position in the translated sequence. Every 
+entry refers to a position in the translated sequence and has as many elements 
+as different synonym codons, and the value will be their respective relative 
+frequency.
+7.A.2 Exclude the positions coding for M and W. These aminoacids do not have
+synonym codons and will not be entered in the substitution.
+7.A.3 SUBSTITUTION. Sample every position for the synonym codons, where the
+probability for each is their relative frequence.
+7.A.4 Get codon optimized sequences.
+            
+```{r, warning=FALSE}
+# 7.A.1 Generate list of probabilities. For loops need empty vectors.
+b <- vector(length = length(tra))      #  This one will harbour the probabilities
+c <- logical(length = length(tra))     #  This one will harbour the positions in
+for (i in 1:length(tra)) {             #      which the probability is 1 (M & W)
+  b[i] <- list(def_table$Freq_rel[def_table$L == def_table$L[def_table$Code == tra[i]]])
+  c[i] <- b[[i]]==1
+}
+## This will return plenty of warnings (as many warnings as M and W are in the GOI)
+# 7.A.2 Exclude the positions coding for M and W
+c <- order(c)
+c <- c[c(which(c==1): length(c))]
+d <- 1:length(tra)
+d <- d[!d%in%c]                         # Exclude those positions coding for M 
+                                        # and W as no synonym codons exist
+# 7.A.3 Substitution of synonym codon codes based on their codon usage
+optimi_code_sampl <- tra             # Empty vector for for loop
+for (i in d) {
+  optimi_code_sampl[i] <- sample(def_table$Code[def_table$L
+                                                == def_table$L[def_table$Code
+                                                               == optimi_code_sampl[i]]],
+                                    1, prob = b[[i]])
+}
+# 7.A.4 Get the optimized nt sequence
+optimi_codon_sampl <- character(length = length(optimi_code_sampl))
+for (i in 1: length(optimi_code_sampl)){
+  optimi_codon_sampl[i] <- paste(def_table$CODON[def_table$Code
+                                                    == optimi_code_sampl[i]])
+}
+optimi_codon_sampl <- s2c(c2s(toupper(optimi_codon_sampl)))
+
+## This chunk will return plenty of warnings (as many as the number aminoacids
+##  different from M and W present in the protein)
+```
+        
+7.B OPTIMIZATION BY THRESHOLD        
+This method consists on the detection of the codons whose relative frequency is 
+below a certain threshold and the substitution by the synonym codon with the 
+highest relative frequency. The threshold must be set carefully, especially 
+considering the relative frequence of those codons with many synonyms, for
+example those encoding for leucine and serine. In those cases, the relative
+frequency is distributed into many codons and thus virtually lower.
+
+```{r}
+# 7.B Substitute codons
+optimi_code_th <- vector(length=length(tra))  # Create empty vectors                               
+optimi_codon_th <- vector(length=length(tra))
+for (i in 1:length(tra)) {                                                           
+  optimi_code_th[i] <- def_table$Code_opt[def_table$Code == tra[i]]           
+  optimi_codon_th[i] <- paste(def_table$Codon_opt[def_table$Code == tra[i]])  
+}
+optimi_codon_th <- s2c(c2s(toupper(optimi_codon_th)))
+```
+        
+8. QUALITY CHECKS
+This step enables enables to detect errors in the previous steps and defective
+results. This step is the same for both optimization methods
+- Compare initial nt sequence with optimized nt sequence.
+- Compare translation of optimized nt sequence withtranslation of optimized code
+  sequence (different traduction methods).
+- Compare translation of initial nt sequence and translation of optimized 
+  initial nt sequence.
+- Get the proportion of changed codons.
+- Get the proportion of changed nt.
+8.1 Test for sampling method 7.A
+8.2 Test for threshols method 7.B
+
+```{r}
+# 8.1 Check for sampling method 7.A
+# TRUE: same translation GOI and optimized codon seq
+identical(seqinr::translate(GOI_nt), seqinr::translate(optimi_codon_sampl))   
+# TRUE: same translation codon and code seq
+identical(seqinr::translate(optimi_codon_sampl), Lcode[optimi_code_sampl]) 
+# FALSE: same codon sequence
+identical(tra, optimi_code_sampl)                                             
+# Number of codons changed
+ind_codon_sampling <- which(tra != optimi_code_sampl)                               
+length(ind_codon_sampling)                                                       
+# Proportion of codons changed
+length(ind_codon_sampling)/length(tra)                                           
+# FALSE: same nt sequence
+identical(GOI_nt, optimi_codon_sampl)                                         
+# Number of codons changed
+ind_nt_sampling <- which(GOI_nt != optimi_codon_sampl)
+length(ind_nt_sampling)                                                          
+# Proportion of codons changed
+length(ind_nt_sampling)/length(GOI_nt)                                           
+```
+```{r}
+# 8.2 Check for threshols method 7.B
+# TRUE: same translation GOI and optimized codon seq
+identical(seqinr::translate(GOI_nt), seqinr::translate(optimi_codon_th))   
+# TRUE: same translation codon and code seq
+identical(seqinr::translate(optimi_codon_th), Lcode[optimi_code_th])
+# FALSE: same code sequence
+identical(tra, optimi_code_th)                                             
+# Number of codons changed
+ind_codon_th <- which(tra != optimi_code_th)                               
+length(ind_codon_th)                                                       
+# Proportion of codons changed
+length(ind_codon_th)/length(tra)                                           
+# FALSE: same nt sequence
+identical(GOI_nt, optimi_codon_th)                                         
+# Number of codons changed
+ind_nt_th <- which(GOI_nt != optimi_codon_th)
+length(ind_nt_th)                                                          
+# Proportion of codons changed
+length(ind_nt_th)/length(GOI_nt)                                           
+```
+
+9. SAVE
+Save the nucleotide sequences coming from both methods in a text file. All these
+sequences will be stored in a new directory called "Optimized" in properly named
+files and fasta format.
+9.1 Create new folder called "Optimized" in the working directory and set it as 
+new working directory (note this change only affects this chunk).
+9.2 Prepare the name of the host species to be part of the sequence files name
+9.2 Save file from both optimization methods (7.A and 7.B)
+
+```{r, warning=FALSE}
+# 9.1 Create a new directory to store the optimized sequences
+new_folder <- paste0(getwd(), "/Optimized")
+dir.create(new_folder)
+setwd(new_folder)
+#9.2 Reshape the species name to name the sequence files
+species_save <- substr(as.vector(str_split(download_species, " ", simplify = TRUE)), 1, 3)
+species_save <- paste(species_save[1], species_save[2], sep = "-")
+
+# Save the nt sequences from from sampling method (7.A) and threshold method (7.B)
+sampling_name <- paste0(GOI, "_optimized_sampling_",species_save, ext)
+threshold_name <- paste0(GOI, "_optimized_threshold_",species_save, ext)
+write.table(toupper(c2s(optimi_codon_sampl)), file = sampling_name,
+            row.names = F, col.names = F, quote = F)
+write.table(toupper(c2s(optimi_codon_th)), file = threshold_name,
+            row.names = F, col.names = F, quote = F)
+```
+
