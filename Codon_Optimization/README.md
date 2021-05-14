@@ -1,7 +1,7 @@
 # PIPELINE FOR CODON OPTIMIZATION
 
-The herein document contains the code to optimize the codons of any given
-nucleotide sequence for any host species. The script will be divided into
+This code is a tool to optimize the codons of any given
+nucleotide sequence for any host species. The script is divided into
 several steps:
 1. Install de required packages
 2. Download the libraries of the installed packages
