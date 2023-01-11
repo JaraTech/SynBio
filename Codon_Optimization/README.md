@@ -18,11 +18,11 @@ several steps:
    - Scan the fasta file and convert into a 1-64 code sequence.
 7. Optimization. There are two methods:
 
-   A) Sampling: this method substitute every codon by a codon encoding for the same aminoacid, taking the relative frequence as the probability for substitution. A given position might remain the same. It is a randomized process and everytime will result something different.
+   A) Sampling: this method substitute every codon by a synonym codon, taking the relative frequence as the probability for substitution. A given position might remain the same. It is a randomized process and everytime will have different results.
     - Generate list of probabilities.
     - Substitute every position. Get codon and code sequences.
         
-   B) Threshold: this method acts on those codons whose relative frequency is below the threshold. Every position in the sequence with such a codon is substituted by the synonym codon with the highest frequency. It is a fixed process based on the last four columns of the data table. It is needed to set the threshold.
+   B) Threshold: this method acts on those codons whose relative frequency is below the threshold. Every position in the sequence with such a codon is substituted by the synonym codon with the highest frequency. It is a fixed process. It is needed to set the threshold.
       
 8. Quality checks. Detection of code errors and defective results.
 9. Save the files in a new directory.
